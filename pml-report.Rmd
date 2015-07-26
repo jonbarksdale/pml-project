@@ -1,0 +1,142 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Jon Barksdale"
+date: "July 25, 2015"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r dataLoad, echo=FALSE, warning=FALSE, message=FALSE}
+workDir <- "work"
+if(!file.exists(workDir)) {
+  dir.create(workDir)
+}
+
+downloadDataSet <- function(url, fileName) {
+  dataPath <- paste(workDir, fileName, sep = '/')
+  
+  if(!file.exists(dataPath)) {
+    download.file(url, dataPath, method = 'curl')
+  }
+  return(dataPath)
+}
+
+trainingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+fullTrainingSet <- read.csv(downloadDataSet(trainingUrl, 'pml-training.csv'))
+testingSet <- read.csv(downloadDataSet(testingUrl, 'pml-testing.csv'))
+```
+
+```{r subsetting, echo=FALSE, warning=FALSE, message=FALSE}
+library(caret)
+set.seed(4518)
+trainingIndex <- createDataPartition(fullTrainingSet$classe, p = 0.8, list = F)
+
+trainSet <- fullTrainingSet[trainingIndex, ]
+cvSet <- fullTrainingSet[-trainingIndex, ]
+
+dimensions <- c("belt", "arm", "dumbbell", "forearm")
+
+predictors <- "user_name"
+genericPredictors <- c("roll_$$", "pitch_$$", "yaw_$$", "total_accel_$$", "gyros_$$_x", "gyros_$$_y", "gyros_$$_z", "accel_$$_x", "accel_$$_y", "accel_$$_z", "magnet_$$_x", "magnet_$$_y", "magnet_$$_z")
+for(k in dimensions) {
+  predictors <- c(predictors, gsub("$$", k, genericPredictors, fixed=T))
+}
+
+trainSet <- trainSet[, c("classe", predictors)]
+```
+
+
+Summary
+-------
+For this assignment, we were given a dataset from the [Human Activity Recogonition](http://groupware.les.inf.puc-rio.br/har) project, and asked to train a model from a training set to predict the class of a particular weight lifting activity.  
+
+Data Preparation
+----------------
+
+To start, I downloaded the [test](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) and [training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) datasets.  I then separated the training set into an actual training set and a cross validation set, with 20% of the training data going into the cross validation set.  There are actually two levels of cross validation being done, once as part of the `train` function to select the best model parameters, and then once again using this preparied cross validation set to choose the best model. 
+
+Exploratory Analysis
+--------------------
+Once the data was properly segmentmented, I performed some exploratory analysis on the training set (excluding the cross validation set).  The first thing that I noticed is that the data appears to have been grouped in windows, and the rows where the `new_window` field was set to `yes` contained more (non NA) values.  Each of these groups (as defined by `num_window`) is specified for a specific individual, are in time order, and the `classe` we are trying to predict is constant.  Unfortunately, as the test set is fixed, and doesn't appear to be grouped in any way, having a model that uses that structure won't help our predictions.  It is a little disappointing, as I believe the structure of the data could have been beneficial, and possibly predictive.  As part of that revelation, I have decided not to use any of the fields that are only present in the `new_window` rows, as that data will probably not be available in the test set.  Also, while the data in the test set is in time order, I don't think it will be useful in the test set, so I wil lnto be including that either.  
+
+I found that there was a high level of correlation between 11 pairs of variables, which suggested that PCA may be useful to compress the features.  
+TODO: what I found
+
+Model Selection
+---------------
+```{r models, echo=TRUE, warning=FALSE, message=FALSE}
+library(caret)
+library(doParallel)
+registerDoParallel(cores=4)
+
+# Try some models! 
+cachedModel <- function(fileName, fun) {
+  if(!file.exists(fileName)) {
+    var <- fun()
+    saveRDS(var, file=fileName)
+    return(var)
+  } else {
+    model <- readRDS(fileName)
+    return(model)
+  }
+}
+
+trCtrl <- trainControl(method = "repeatedcv", number = 10, savePredictions = T, classProbs = T, preProcOptions = list(thresh = 0.8, ICAcomp = 3))
+
+svmLinear <- cachedModel("work/svmLinear.rds", function() {set.seed(1246); train(classe ~ ., trainSet, method = "svmLinear", trControl = trCtrl)})
+svmLinearPCA <- cachedModel("work/svmLinearPCA.rds", function() {set.seed(42235); train(classe ~ ., trainSet, method = "svmLinear", preProcess = "pca", trControl = trCtrl)})
+randomFModel <- cachedModel("work/randomForest.rds", function() {set.seed(2314); train(classe ~ ., trainSet, method = "rf", trControl = trCtrl)})
+randomFModelPCA <- cachedModel("work/randomForestPCA.rds", function() {set.seed(98754); train(classe ~ ., trainSet, method = "rf", preProcess = "pca", trControl = trCtrl)})
+adaBoost <- cachedModel("work/adaboost.rds", function() {set.seed(889); train(classe ~ ., trainSet, method = "AdaBoost.M1", trControl = trCtrl)})
+adaBoostPCA <- cachedModel("work/adaboostPCA.rds", function() {set.seed(7139); train(classe ~ ., trainSet, method = "AdaBoost.M1", preProcess = "pca", trControl = trCtrl)})
+rpart <- cachedModel("work/rpart.rds", function() {set.seed(3451); train(classe ~ ., trainSet, method = "rpart", trControl = trCtrl)})
+```
+
+
+After understanding the data a little better, I decided to try a number of different models, both with and without PCA to see what performed the best against the cross validation set.  I tried svmLinear, random forest, AdaBoost.M1 and rpart algorithms.  Based on the results of those models, it appears that using PCA is universally worse than not using PCA, at least with the models I used.  I suspect that the compression still loses a large amount of information, so perhaps that should be reserved for situations where there are a truly enormous amount of covariates.  I was unable to evaluate the svmLinear model with PCA due to some errors when trying to predict with the cross validation set, so I left it out.  It had the lowest in sample accuracy of all the models I tried, so it seemed to be a reasonable ommission.
+
+```{r modelEval, echo=TRUE, warning=FALSE, message=FALSE}
+library(caret)
+
+evaluateModel <- function(model) {
+  confusionMatrix(predict(model, cvSet), cvSet$classe)
+}
+
+models <- c('svmLinear', 'randomFModel', 'randomFModelPCA', 'adaBoost', 'adaBoostPCA', 'rpart')
+
+results <- numeric()
+for (m in models) {
+  results[m] <- evaluateModel(get(m))$overall["Accuracy"]
+}
+
+bestResult <- results[which.max(results)]
+bestModel <- get(names(bestResult))
+```
+
+```{r errorCalc, echo=FALSE, warning=FALSE, message=FALSE}
+library(caret)
+
+trainingAccuracy <- randomFModel$results[2, "Accuracy"]
+trainingSampleError <- 1 - trainingAccuracy
+
+m <- confusionMatrix(predict(randomFModel, cvSet), cvSet$classe)
+
+cvAccuracy <- m$overall["Accuracy"]
+cvSampleError <- 1 - cvAccuracy
+```
+
+The best performing model was the random forests without PCA, which had an accuracy of `r trainingAccuracy` (sample error of `r trainingSampleError` ) on the cross validation sets in training, and an out of sample accuracy of `r cvAccuracy` (out of sample error of `r cvSampleError`), as based on the validation set extracted before training. Surprisingly, the out of sample error was even lower than the training error, which I attribute to dumb luck.  On the bright side, it also seems to indicate that the model has not overfit, and still generalizes well to new data.  
+
+Conclusion
+----------
+Overall, the random forests algorithm performed with extremely high accuracy on both the training and validation sets.  As the final testing set is not truth marked, it is not possible to get an accuracy estimate on it automatically.  After submitting all of the results however, the model appears to have predicted those 20 results with perfect accuracy. 
+
+Citations
+---------
+
+All data for this report comes from  http://groupware.les.inf.puc-rio.br/har: 
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: [Accelerometers' Data Classification of Body Postures and Movements](http://groupware.les.inf.puc-rio.br/work.jsf?p1=10335). Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
