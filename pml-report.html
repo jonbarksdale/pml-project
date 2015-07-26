@@ -79,7 +79,7 @@ img {
 <div id="exploratory-analysis" class="section level2">
 <h2>Exploratory Analysis</h2>
 <p>Once the data was properly segmentmented, I performed some exploratory analysis on the training set (excluding the cross validation set). The first thing that I noticed is that the data appears to have been grouped in windows, and the rows where the <code>new_window</code> field was set to <code>yes</code> contained more (non NA) values. Each of these groups (as defined by <code>num_window</code>) is specified for a specific individual, are in time order, and the <code>classe</code> we are trying to predict is constant. Unfortunately, as the test set is fixed, and doesn’t appear to be grouped in any way, having a model that uses that structure won’t help our predictions. It is a little disappointing, as I believe the structure of the data could have been beneficial, and possibly predictive. As part of that revelation, I have decided not to use any of the fields that are only present in the <code>new_window</code> rows, as that data will probably not be available in the test set. Also, while the data in the test set is in time order, I don’t think it will be useful in the test set, so I wil lnto be including that either.</p>
-<p>I found that there was a high level of correlation between 11 pairs of variables, which suggested that PCA may be useful to compress the features.<br />TODO: what I found</p>
+<p>I found that there was a high level of correlation between 11 pairs of variables, which suggested that PCA may be useful to compress the features.</p>
 </div>
 <div id="model-selection" class="section level2">
 <h2>Model Selection</h2>
